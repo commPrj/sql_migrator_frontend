@@ -3,6 +3,47 @@ import axios from 'axios'
 // Mock 모드 설정 (Backend 연동 전까지 true)
 const USE_MOCK = true
 
+// Mock 프로젝트 저장소 (localStorage 연동으로 새로고침 후에도 유지)
+const MOCK_STORAGE_KEY = 'sql_migrator_mock_projects'
+
+// 기본 샘플 데이터 (spec 2.3 Interface A 통신 샘플)
+const DEFAULT_SAMPLE_PROJECT = {
+  project_id: 'PRJ_SKB_001',
+  project_name: 'SKB 차세대 마이그레이션',
+  db_config: {
+    host: '10.1.2.3',
+    port: 5432,
+    db_name: 'target_pg_db',
+    user: 'migrator',
+    pw: 'password123!'
+  },
+  db_config_summary: '10.1.2.3:5432/target_pg_db (user=migrator)'
+}
+
+function loadMockProjects() {
+  try {
+    const stored = localStorage.getItem(MOCK_STORAGE_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      // 빈 배열인 경우에도 샘플 데이터 반환
+      if (parsed.length === 0) {
+        return [DEFAULT_SAMPLE_PROJECT]
+      }
+      return parsed
+    }
+    // localStorage가 비어있으면 샘플 데이터 반환
+    return [DEFAULT_SAMPLE_PROJECT]
+  } catch {
+    return [DEFAULT_SAMPLE_PROJECT]
+  }
+}
+
+function saveMockProjects(projects) {
+  localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(projects))
+}
+
+let mockProjects = loadMockProjects()
+
 // API 기본 설정
 const api = axios.create({
   baseURL: '/api',
@@ -12,20 +53,34 @@ const api = axios.create({
   }
 })
 
+// ============================================
+// Interface A: 프로젝트 관리 API
+// ============================================
+
 /**
- * [Interface A] 프로젝트 설정 저장
- * @param {Object} project - 프로젝트 정보
- * @param {string} project.project_id - 프로젝트 ID
- * @param {string} project.project_name - 프로젝트 이름
- * @param {Object} project.db_config - DB 접속 정보
+ * 프로젝트 등록 - POST /api/projects
  */
 export async function saveProject(project) {
-  // Mock 모드
   if (USE_MOCK) {
     console.log('[Mock] saveProject:', project)
+
+    // 중복 ID 체크
+    const exists = mockProjects.find(p => p.project_id === project.project_id)
+    if (exists) {
+      throw new Error(`프로젝트 ID '${project.project_id}'가 이미 존재합니다.`)
+    }
+
+    mockProjects.push({
+      ...project,
+      db_config_summary: `${project.db_config.host}:${project.db_config.port}/${project.db_config.db_name} (user=${project.db_config.user})`
+    })
+
+    // localStorage에 저장
+    saveMockProjects(mockProjects)
+
     return {
       status: 'success',
-      message: '프로젝트 DB 설정이 완료되었습니다. (Mock)',
+      message: '프로젝트 DB 설정이 완료되었습니다.',
       project_id: project.project_id
     }
   }
@@ -35,16 +90,121 @@ export async function saveProject(project) {
 }
 
 /**
- * [Interface B] 쿼리 변환 요청
- * @param {Object} data - 변환 요청 데이터
- * @param {string} data.project_id - 프로젝트 ID
- * @param {string} data.xml_file_name - XML 파일명
- * @param {string} data.mapper_namespace - 네임스페이스
- * @param {string} data.file_created_at - 생성 일시
- * @param {Array} data.queries - 쿼리 배열
+ * 프로젝트 목록 조회 - GET /api/projects
+ */
+export async function getProjects() {
+  if (USE_MOCK) {
+    console.log('[Mock] getProjects')
+    return {
+      status: 'success',
+      projects: mockProjects.map(p => ({
+        project_id: p.project_id,
+        project_name: p.project_name,
+        db_config_summary: p.db_config_summary
+      }))
+    }
+  }
+
+  const response = await api.get('/projects')
+  return response.data
+}
+
+/**
+ * 단일 프로젝트 조회 - GET /api/projects/{project_id}
+ */
+export async function getProject(projectId) {
+  if (USE_MOCK) {
+    console.log('[Mock] getProject:', projectId)
+
+    const project = mockProjects.find(p => p.project_id === projectId)
+    if (!project) {
+      throw new Error(`프로젝트 '${projectId}'를 찾을 수 없습니다.`)
+    }
+
+    return {
+      status: 'success',
+      project_id: project.project_id,
+      project_name: project.project_name,
+      db_config: {
+        ...project.db_config,
+        pw: '****' // 비밀번호 마스킹
+      }
+    }
+  }
+
+  const response = await api.get(`/projects/${projectId}`)
+  return response.data
+}
+
+/**
+ * 프로젝트 삭제 - DELETE /api/projects/{project_id}
+ */
+export async function deleteProject(projectId) {
+  if (USE_MOCK) {
+    console.log('[Mock] deleteProject:', projectId)
+
+    const index = mockProjects.findIndex(p => p.project_id === projectId)
+    if (index === -1) {
+      throw new Error(`프로젝트 '${projectId}'를 찾을 수 없습니다.`)
+    }
+
+    mockProjects.splice(index, 1)
+
+    // localStorage에 저장
+    saveMockProjects(mockProjects)
+
+    return {
+      status: 'success',
+      message: `프로젝트 '${projectId}'가 삭제되었습니다.`
+    }
+  }
+
+  const response = await api.delete(`/projects/${projectId}`)
+  return response.data
+}
+
+/**
+ * DB 연결 테스트 - POST /api/projects/{project_id}/test-connection
+ */
+export async function testConnection(projectId) {
+  if (USE_MOCK) {
+    console.log('[Mock] testConnection:', projectId)
+
+    const project = mockProjects.find(p => p.project_id === projectId)
+    if (!project) {
+      throw new Error(`프로젝트 '${projectId}'를 찾을 수 없습니다.`)
+    }
+
+    // Mock: 랜덤하게 성공/실패
+    const success = Math.random() > 0.3
+
+    if (success) {
+      return {
+        status: 'success',
+        message: `DB 연결 성공 (${project.db_config_summary})`,
+        connected: true
+      }
+    } else {
+      return {
+        status: 'error',
+        message: 'DB 연결 실패: Connection refused',
+        connected: false
+      }
+    }
+  }
+
+  const response = await api.post(`/projects/${projectId}/test-connection`)
+  return response.data
+}
+
+// ============================================
+// Interface B: 쿼리 변환 API
+// ============================================
+
+/**
+ * 쿼리 변환 요청 - POST /api/convert
  */
 export async function convertQueries(data) {
-  // Mock 모드
   if (USE_MOCK) {
     console.log('[Mock] convertQueries:', data)
     return generateMockResponse(data)
@@ -88,7 +248,7 @@ function convertMockSql(originalSql) {
   converted = converted.replace(/SYSDATE/gi, 'CURRENT_TIMESTAMP')
   converted = converted.replace(/NVL\(/gi, 'COALESCE(')
   converted = converted.replace(/DECODE\(/gi, 'CASE WHEN ')
-  converted = converted.replace(/\(\+\)/g, '') // Oracle outer join 제거
+  converted = converted.replace(/\(\+\)/g, '')
   return converted
 }
 
